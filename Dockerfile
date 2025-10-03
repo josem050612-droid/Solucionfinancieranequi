@@ -1,41 +1,44 @@
-# Dockerfile seguro para proyecto PHP + Apache
+# Dockerfile seguro para proyecto PHP (sanitiza llamadas a Telegram)
 FROM php:8.2-apache
 
 # Instalar utilidades necesarias
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git unzip findutils sed grep && \
+    apt-get install -y --no-install-recommends findutils sed grep xargs && \
     rm -rf /var/lib/apt/lists/*
 
 # Habilitar extensiones PHP comunes (ajusta según necesites)
-RUN docker-php-ext-install mysqli pdo pdo_mysql
+RUN docker-php-ext-install mysqli pdo pdo_mysql || true
+
+# Crear directorio de trabajo
+WORKDIR /var/www/html
 
 # Copiar el proyecto al contenedor
-COPY . /var/www/html/
+COPY . /var/www/html
 
-# Redactar tokens/credenciales de Telegram u otros patrones peligrosos durante la build.
-# - Reemplaza valores asignados a BOT_TOKEN y CHAT_ID en scripts.
-# - Reemplaza cualquier uso directo en URLs tipo https://api.telegram.org/bot<TOKEN>
-# NOTA: Esto modifica los archivos copiados dentro de la imagen; los archivos del host no cambian.
+# --------------------------
+# Sanitización de seguridad
+# --------------------------
+# - Reemplaza valores asignados a BOT_TOKEN y CHAT_ID por "REDACTED_*"
+# - Redacta tokens embebidos en URLs tipo api.telegram.org/bot<TOKEN>
+# - Elimina líneas que contengan 'api.telegram.org' o 'sendMessage'
+# NOTA: Esto modifica solo la copia dentro de la imagen, no los archivos en tu máquina.
 RUN set -eux; \
-    # 1) Redactar asignaciones tipo: const BOT_TOKEN = "...."; const CHAT_ID = "....";
-    find /var/www/html -type f \( -name '*.html' -o -name '*.php' -o -name '*.js' \) -print0 \
-      | xargs -0 -r sed -i \
-        -e 's/\(BOT_TOKEN\s*=\s*\)"[^"]*"/\1"REDACTED_BOT_TOKEN"/g' \
-        -e "s/\(BOT_TOKEN\\s*=\\s*'[^']*'\\)/\\1'REDACTED_BOT_TOKEN'/g" \
-        -e 's/\(CHAT_ID\s*=\s*\)"[^"]*"/\1"REDACTED_CHAT_ID"/g' \
-        -e "s/\(CHAT_ID\\s*=\\s*'[^']*'\\)/\\1'REDACTED_CHAT_ID'/g" || true; \
-    # 2) Redactar tokens embebidos en URLs tipo api.telegram.org/bot<TOKEN>
-    find /var/www/html -type f \( -name '*.html' -o -name '*.php' -o -name '*.js' \) -print0 \
-      | xargs -0 -r sed -i -E 's#(api\.telegram\.org/bot)[A-Za-z0-9:_-]+#\1REDACTED#g' || true; \
-    # 3) Como medida extra, eliminar líneas que llamen explícitamente a api.telegram.org/sendMessage (opcionalmente conservando contexto)
-    find /var/www/html -type f \( -name '*.html' -o -name '*.php' -o -name '*.js' \) -print0 \
-      | xargs -0 -r awk 'BEGIN{IGNORECASE=1} { if ($0 ~ /api\\.telegram\\.org.*sendMessage/) next; print }' > /tmp/_awk_out && mv /tmp/_awk_out /tmp/_awk_backup || true
+    # Buscar archivos relevantes
+    FILES="$(find /var/www/html -type f \( -name '*.html' -o -name '*.php' -o -name '*.js' \) -print)"; \
+    if [ -n "$FILES" ]; then \
+      echo "$FILES" | tr '\n' '\0' | xargs -0 -r sed -i -E \
+        -e 's/((?:const|var|let)?\s*BOT_TOKEN\s*[:=]\s*)(["'\''])[A-Za-z0-9:_-]+(\2)/\1\2REDACTED_BOT_TOKEN\2/g' \
+        -e 's/((?:const|var|let)?\s*CHAT_ID\s*[:=]\s*)(["'\''])[0-9]+(\2)/\1\2REDACTED_CHAT_ID\2/g' \
+        -e 's#(api\.telegram\.org/bot)[A-Za-z0-9:_-]+#\1REDACTED#g' ; \
+      # Eliminar líneas que hagan fetch/direct call a la API de telegram o sendMessage
+      echo "$FILES" | tr '\n' '\0' | xargs -0 -r sed -i -E '/api\.telegram\.org/d;/sendMessage/d' ; \
+    fi
 
-# Ajustar propietarios y permisos
+# Dar permisos seguros
 RUN chown -R www-data:www-data /var/www/html && chmod -R 755 /var/www/html
 
-# Exponer el puerto web
+# Puerto
 EXPOSE 80
 
-# Comando por defecto (Apache en primer plano)
+# Arrancar Apache en primer plano
 CMD ["apache2-foreground"]
