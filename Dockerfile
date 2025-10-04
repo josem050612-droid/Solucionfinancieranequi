@@ -33,3 +33,24 @@ RUN chown -R www-data:www-data /var/www/html && chmod -R 755 /var/www/html
 
 EXPOSE 80
 CMD ["apache2-foreground"]
+# Imagen base con PHP y Apache
+FROM php:8.2-apache
+
+# Configuración de directorio de trabajo
+WORKDIR /var/www/html
+
+# Copiar TODO el proyecto (PHP, HTML, CSS, JS, images)
+COPY . /var/www/html/
+
+# Ajustar permisos (muy importante para Apache)
+RUN chown -R www-data:www-data /var/www/html && chmod -R 755 /var/www/html
+
+# Habilitar módulos básicos de Apache si lo necesitas
+# (rewrite es muy usado en proyectos PHP modernos como Laravel/WordPress)
+RUN a2enmod rewrite
+
+# Exponer puerto 80
+EXPOSE 80
+
+# Iniciar Apache en primer plano
+CMD ["apache2-foreground"]
